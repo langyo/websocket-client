@@ -33,7 +33,7 @@ namespace Websocket.Client
         {
             if (!IsStarted)
             {
-                _logger.LogDebug(L("Client not started, ignoring reconnection.."), Name);
+                _logger.LogDebug(LogPrefix + "Client not started, ignoring reconnection..", Name);
                 return;
             }
 
@@ -49,9 +49,9 @@ namespace Websocket.Client
 
         private async Task ReconnectSynchronized(ReconnectionType type, bool failFast, Exception? causedException)
         {
-            using (await _locker.LockAsync())
+            using (await _locker.LockAsync().ConfigureAwait(false))
             {
-                await Reconnect(type, failFast, causedException);
+                await Reconnect(type, failFast, causedException).ConfigureAwait(false);
             }
         }
 
@@ -74,7 +74,7 @@ namespace Websocket.Client
                 if (disInfo.CancelReconnection)
                 {
                     // reconnection canceled by user, do nothing
-                    _logger.LogInformation(L("Reconnecting canceled by user, exiting."), Name);
+                    _logger.LogInformation(LogPrefix + "Reconnecting canceled by user, exiting.", Name);
                 }
             }
 
@@ -85,7 +85,7 @@ namespace Websocket.Client
             }
             catch (Exception e)
             {
-                _logger.LogError(e, L("Exception while aborting client. Error: '{error}'"), Name, e.Message);
+                _logger.LogError(e, LogPrefix + "Exception while aborting client. Error: '{error}'", Name, e.Message);
             }
             _client?.Dispose();
 
@@ -97,7 +97,7 @@ namespace Websocket.Client
                 return;
             }
 
-            _logger.LogDebug(L("Reconnecting..."), Name);
+            _logger.LogDebug(LogPrefix + "Reconnecting...", Name);
             _cancellation = new CancellationTokenSource();
             await StartClient(_url, _cancellation.Token, type, failFast).ConfigureAwait(false);
             _reconnecting = false;
@@ -128,7 +128,7 @@ namespace Websocket.Client
             var diffMs = Math.Abs(DateTime.UtcNow.Subtract(_lastReceivedMsg).TotalMilliseconds);
             if (diffMs > timeoutMs)
             {
-                _logger.LogDebug(L("Last message received more than {timeoutMs} ms ago. Hard restart.."), Name, timeoutMs.ToString("F"));
+                _logger.LogDebug(LogPrefix + "Last message received more than {timeoutMs} ms ago. Hard restart..", Name, timeoutMs);
 
                 DeactivateLastChance();
                 _ = ReconnectSynchronized(ReconnectionType.NoMessageReceived, false, null);

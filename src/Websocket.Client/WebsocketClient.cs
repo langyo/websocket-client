@@ -2,7 +2,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IO;
 using System;
-using System.Buffers;
 using System.IO;
 using System.Net.WebSockets;
 using System.Reactive.Linq;
@@ -24,7 +23,8 @@ namespace Websocket.Client
         private readonly WebsocketAsyncLock _locker = new WebsocketAsyncLock();
         private readonly Func<Uri, CancellationToken, Task<WebSocket>> _connectionFactory;
         private readonly RecyclableMemoryStreamManager? _memoryStreamManager;
-        private static readonly Lazy<RecyclableMemoryStreamManager> _globalMemoryStreamManager = new Lazy<RecyclableMemoryStreamManager>(new RecyclableMemoryStreamManager());
+        private const string LogPrefix = "[WEBSOCKET {name}] ";
+        private static readonly Lazy<RecyclableMemoryStreamManager> _globalMemoryStreamManager = new Lazy<RecyclableMemoryStreamManager>(() => new RecyclableMemoryStreamManager());
 
         private RecyclableMemoryStreamManager MemoryStreamManager =>
             _memoryStreamManager ?? _globalMemoryStreamManager.Value;
@@ -47,6 +47,9 @@ namespace Websocket.Client
         private readonly Subject<ResponseMessage> _messageReceivedSubject = new Subject<ResponseMessage>();
         private readonly Subject<ReconnectionInfo> _reconnectionSubject = new Subject<ReconnectionInfo>();
         private readonly Subject<DisconnectionInfo> _disconnectedSubject = new Subject<DisconnectionInfo>();
+        private readonly IObservable<ResponseMessage> _messageReceived;
+        private readonly IObservable<ReconnectionInfo> _reconnectionHappened;
+        private readonly IObservable<DisconnectionInfo> _disconnectionHappened;
 
         /// <summary>
         /// A simple websocket client with built-in reconnection and error handling
@@ -95,6 +98,9 @@ namespace Websocket.Client
                 return client;
             });
             _memoryStreamManager = memoryStreamManager;
+            _messageReceived = _messageReceivedSubject.AsObservable();
+            _reconnectionHappened = _reconnectionSubject.AsObservable();
+            _disconnectionHappened = _disconnectedSubject.AsObservable();
         }
 
         /// <summary>
@@ -113,17 +119,17 @@ namespace Websocket.Client
         /// <summary>
         /// Stream with received message (raw format)
         /// </summary>
-        public IObservable<ResponseMessage> MessageReceived => _messageReceivedSubject.AsObservable();
+        public IObservable<ResponseMessage> MessageReceived => _messageReceived;
 
         /// <summary>
         /// Stream for reconnection event (triggered after the new connection) 
         /// </summary>
-        public IObservable<ReconnectionInfo> ReconnectionHappened => _reconnectionSubject.AsObservable();
+        public IObservable<ReconnectionInfo> ReconnectionHappened => _reconnectionHappened;
 
         /// <summary>
         /// Stream for disconnection event (triggered after the connection was lost) 
         /// </summary>
-        public IObservable<DisconnectionInfo> DisconnectionHappened => _disconnectedSubject.AsObservable();
+        public IObservable<DisconnectionInfo> DisconnectionHappened => _disconnectionHappened;
 
         /// <summary>
         /// Time range for how long to wait while connecting a new client.
@@ -225,7 +231,7 @@ namespace Websocket.Client
                 return;
 
             _disposing = true;
-            _logger.LogDebug(L("Disposing.."), Name);
+            _logger.LogDebug(LogPrefix + "Disposing..", Name);
             try
             {
                 _messagesTextToSendQueue.Writer.TryComplete();
@@ -245,7 +251,7 @@ namespace Websocket.Client
             }
             catch (Exception e)
             {
-                _logger.LogError(e, L("Failed to dispose client, error: {error}"), Name, e.Message);
+                _logger.LogError(e, LogPrefix + "Failed to dispose client, error: {error}", Name, e.Message);
             }
 
             if (IsRunning)
@@ -336,13 +342,13 @@ namespace Websocket.Client
 
             if (IsStarted)
             {
-                _logger.LogDebug(L("Client already started, ignoring.."), Name);
+                _logger.LogDebug(LogPrefix + "Client already started, ignoring..", Name);
                 return;
             }
 
             IsStarted = true;
 
-            _logger.LogDebug(L("Starting.."), Name);
+            _logger.LogDebug(LogPrefix + "Starting..", Name);
             _cancellation = new CancellationTokenSource();
             _cancellationTotal = new CancellationTokenSource();
 
@@ -371,7 +377,7 @@ namespace Websocket.Client
 
             if (!IsRunning)
             {
-                _logger.LogInformation(L("Client is already stopped"), Name);
+                _logger.LogInformation(LogPrefix + "Client is already stopped", Name);
                 IsStarted = false;
                 return false;
             }
@@ -389,7 +395,7 @@ namespace Websocket.Client
             }
             catch (Exception e)
             {
-                _logger.LogError(e, L("Error while stopping client, message: '{error}'"), Name, e.Message);
+                _logger.LogError(e, LogPrefix + "Error while stopping client, message: '{error}'", Name, e.Message);
 
                 if (failFast)
                 {
@@ -437,8 +443,8 @@ namespace Websocket.Client
                 if (info.CancelReconnection)
                 {
                     // reconnection canceled by user, do nothing
-                    _logger.LogError(e, L("Exception while connecting. " +
-                                       "Reconnecting canceled by user, exiting. Error: '{error}'"), Name, e.Message);
+                    _logger.LogError(e, LogPrefix + "Exception while connecting. " +
+                                       "Reconnecting canceled by user, exiting. Error: '{error}'", Name, e.Message);
                     return;
                 }
 
@@ -451,14 +457,14 @@ namespace Websocket.Client
 
                 if (ErrorReconnectTimeout == null)
                 {
-                    _logger.LogError(e, L("Exception while connecting. " +
-                                       "Reconnecting disabled, exiting. Error: '{error}'"), Name, e.Message);
+                    _logger.LogError(e, LogPrefix + "Exception while connecting. " +
+                                       "Reconnecting disabled, exiting. Error: '{error}'", Name, e.Message);
                     return;
                 }
 
                 var timeout = ErrorReconnectTimeout.Value;
-                _logger.LogError(e, L("Exception while connecting. " +
-                                   "Waiting {timeout} sec before next reconnection try. Error: '{error}'"), Name, timeout.TotalSeconds, e.Message);
+                _logger.LogError(e, LogPrefix + "Exception while connecting. " +
+                                   "Waiting {timeout} sec before next reconnection try. Error: '{error}'", Name, timeout.TotalSeconds, e.Message);
                 _errorReconnectTimer?.Dispose();
                 _errorReconnectTimer = new Timer(ReconnectOnError, e, timeout, Timeout.InfiniteTimeSpan);
             }
@@ -482,85 +488,88 @@ namespace Websocket.Client
             Exception? causedException = null;
             try
             {
-                // define buffer here and reuse, to avoid more allocation
                 const int chunkSize = 1024 * 4;
-                // allocate bigger buffer (16kb) to avoid resizing in case of big messages
-                var arrayBufferWriter = new ArrayBufferWriter<byte>(chunkSize * 4);
+                const int maxRetainedReceiveBufferSize = 1024 * 64;
+                using var receiveBuffer = new PooledBufferWriter(chunkSize * 4);
 
                 do
                 {
-                    ValueWebSocketReceiveResult result;
-
-                    while (true)
+                    try
                     {
-                        var buffer = arrayBufferWriter.GetMemory(chunkSize);
-                        result = await client.ReceiveAsync(buffer, token);
+                        ValueWebSocketReceiveResult result;
 
-                        arrayBufferWriter.Advance(result.Count);
-
-                        if (result.EndOfMessage)
-                            break;
-                    }
-
-                    ResponseMessage message;
-
-                    if (result.MessageType == WebSocketMessageType.Text && IsTextMessageConversionEnabled)
-                    {
-                        var data = GetEncoding().GetString(arrayBufferWriter.WrittenSpan);
-                        message = ResponseMessage.TextMessage(data);
-                    }
-                    else if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        _logger.LogDebug(L("Received close message"), Name);
-
-                        if (!IsStarted || _stopping)
+                        while (true)
                         {
-                            return;
+                            var buffer = receiveBuffer.GetMemory(chunkSize);
+                            result = await client.ReceiveAsync(buffer, token);
+
+                            receiveBuffer.Advance(result.Count);
+
+                            if (result.EndOfMessage)
+                                break;
                         }
 
-                        var info = DisconnectionInfo.Create(DisconnectionType.ByServer, client, null);
-                        _disconnectedSubject.OnNext(info);
+                        ResponseMessage message;
 
-                        if (info.CancelClosing)
+                        if (result.MessageType == WebSocketMessageType.Text && IsTextMessageConversionEnabled)
                         {
-                            // closing canceled, reconnect if enabled
-                            if (IsReconnectionEnabled)
+                            var data = GetEncoding().GetString(receiveBuffer.WrittenSpan);
+                            message = ResponseMessage.TextMessage(data);
+                        }
+                        else if (result.MessageType == WebSocketMessageType.Close)
+                        {
+                            _logger.LogDebug(LogPrefix + "Received close message", Name);
+
+                            if (!IsStarted || _stopping)
                             {
-                                throw new OperationCanceledException($"Websocket connection was closed by server (client: {Name})");
+                                return;
                             }
 
-                            continue;
-                        }
+                            var info = DisconnectionInfo.Create(DisconnectionType.ByServer, client, null);
+                            _disconnectedSubject.OnNext(info);
 
-                        await StopInternal(client, WebSocketCloseStatus.NormalClosure, "Closing", token, false, true);
+                            if (info.CancelClosing)
+                            {
+                                // closing canceled, reconnect if enabled
+                                if (IsReconnectionEnabled)
+                                {
+                                    throw new OperationCanceledException($"Websocket connection was closed by server (client: {Name})");
+                                }
 
-                        // reconnect if enabled
-                        if (IsReconnectionEnabled && !ShouldIgnoreReconnection(client))
-                        {
-                            _ = ReconnectSynchronized(ReconnectionType.ByServer, false, null);
-                        }
+                                continue;
+                            }
 
-                        return;
-                    }
-                    else
-                    {
-                        if (IsStreamDisposedAutomatically)
-                        {
-                            message = ResponseMessage.BinaryMessage(arrayBufferWriter.WrittenSpan.ToArray());
+                            await StopInternal(client, WebSocketCloseStatus.NormalClosure, "Closing", token, false, true);
+
+                            // reconnect if enabled
+                            if (IsReconnectionEnabled && !ShouldIgnoreReconnection(client))
+                            {
+                                _ = ReconnectSynchronized(ReconnectionType.ByServer, false, null);
+                            }
+
+                            return;
                         }
                         else
                         {
-                            var stream = MemoryStreamManager.GetStream(arrayBufferWriter.WrittenSpan);
-                            message = ResponseMessage.BinaryStreamMessage(stream);
+                            if (IsStreamDisposedAutomatically)
+                            {
+                                message = ResponseMessage.BinaryMessage(receiveBuffer.WrittenSpan.ToArray());
+                            }
+                            else
+                            {
+                                var stream = MemoryStreamManager.GetStream(receiveBuffer.WrittenSpan);
+                                message = ResponseMessage.BinaryStreamMessage(stream);
+                            }
                         }
+
+                        _logger.LogTrace(LogPrefix + "Received:  {message}", Name, message);
+                        _lastReceivedMsg = DateTime.UtcNow;
+                        _messageReceivedSubject.OnNext(message);
                     }
-
-                    // clear buffer for next message
-                    arrayBufferWriter.Clear();
-
-                    _logger.LogTrace(L("Received:  {message}"), Name, message);
-                    _lastReceivedMsg = DateTime.UtcNow;
-                    _messageReceivedSubject.OnNext(message);
+                    finally
+                    {
+                        receiveBuffer.Clear(maxRetainedReceiveBufferSize);
+                    }
 
                 } while (client.State == WebSocketState.Open && !token.IsCancellationRequested);
             }
@@ -581,7 +590,7 @@ namespace Websocket.Client
             }
             catch (Exception e)
             {
-                _logger.LogError(e, L("Error while listening to websocket stream, error: '{error}'"), Name, e.Message);
+                _logger.LogError(e, LogPrefix + "Error while listening to websocket stream, error: '{error}'", Name, e.Message);
                 causedException = e;
             }
 
@@ -594,8 +603,8 @@ namespace Websocket.Client
             if (LostReconnectTimeout.HasValue)
             {
                 var timeout = LostReconnectTimeout.Value;
-                _logger.LogWarning(L("Listening websocket stream is lost. " +
-                               "Waiting {timeout} sec before next reconnection try."), Name, timeout.TotalSeconds);
+                _logger.LogWarning(LogPrefix + "Listening websocket stream is lost. " +
+                               "Waiting {timeout} sec before next reconnection try.", Name, timeout.TotalSeconds);
                 await Task.Delay(timeout, token).ConfigureAwait(false);
             }
 
@@ -630,11 +639,6 @@ namespace Websocket.Client
                 throw new WebsocketException("Cannot cast 'WebSocket' client to 'ClientWebSocket', " +
                                              "provide correct type via factory or don't use this property at all.");
             return specific;
-        }
-
-        private string L(string msg)
-        {
-            return $"[WEBSOCKET {{name}}] {msg}";
         }
 
         private DisconnectionType TranslateTypeToDisconnection(ReconnectionType type)

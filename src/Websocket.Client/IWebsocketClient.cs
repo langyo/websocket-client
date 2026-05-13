@@ -207,7 +207,7 @@ namespace Websocket.Client
         /// <summary>
         /// Terminate the websocket connection and cleanup everything
         /// </summary>
-        void Dispose();
+        new void Dispose();
 
         /// <summary>
         /// Start listening to the websocket stream on the background thread.

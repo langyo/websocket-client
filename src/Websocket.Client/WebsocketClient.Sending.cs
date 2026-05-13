@@ -2,7 +2,6 @@
 using System;
 using System.Buffers;
 using System.Net.WebSockets;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -22,7 +21,7 @@ namespace Websocket.Client
             SingleWriter = false
         });
 
-        private static readonly byte[] _emptyArray = { };
+        private static readonly byte[] _emptyArray = Array.Empty<byte>();
 
         /// <inheritdoc />
         public bool TextSenderRunning { get; private set; }
@@ -178,7 +177,7 @@ namespace Websocket.Client
                         }
                         catch (Exception e)
                         {
-                            _logger.LogError(e, L("Failed to send text message: '{message}'. Error: {error}"), Name, message, e.Message);
+                            _logger.LogError(e, LogPrefix + "Failed to send text message: '{message}'. Error: {error}", Name, message, e.Message);
                         }
                     }
                 }
@@ -186,24 +185,24 @@ namespace Websocket.Client
             catch (TaskCanceledException e)
             {
                 // task was canceled, ignore
-                _logger.LogDebug(e, L("Sending text thread failed, error: {error}. Shutting down."), Name, e.Message);
+                _logger.LogDebug(e, LogPrefix + "Sending text thread failed, error: {error}. Shutting down.", Name, e.Message);
             }
             catch (OperationCanceledException e)
             {
                 // operation was canceled, ignore
-                _logger.LogDebug(e, L("Sending text thread failed, error: {error}. Shutting down."), Name, e.Message);
+                _logger.LogDebug(e, LogPrefix + "Sending text thread failed, error: {error}. Shutting down.", Name, e.Message);
             }
             catch (Exception e)
             {
                 if (_cancellationTotal?.IsCancellationRequested == true || _disposing)
                 {
                     // disposing/canceling, do nothing and exit
-                    _logger.LogDebug(e, L("Sending text thread failed, error: {error}. Shutting down."), Name, e.Message);
+                    _logger.LogDebug(e, LogPrefix + "Sending text thread failed, error: {error}. Shutting down.", Name, e.Message);
                     TextSenderRunning = false;
                     return;
                 }
 
-                _logger.LogDebug(e, L("Sending text thread failed, error: {error}. Creating a new sending thread."), Name, e.Message);
+                _logger.LogDebug(e, LogPrefix + "Sending text thread failed, error: {error}. Creating a new sending thread.", Name, e.Message);
                 StartBackgroundThreadForSendingText();
             }
             TextSenderRunning = false;
@@ -224,7 +223,7 @@ namespace Websocket.Client
                         }
                         catch (Exception e)
                         {
-                            _logger.LogError(e, L("Failed to send binary message: '{message}'. Error: {error}"), Name, message, e.Message);
+                            _logger.LogError(e, LogPrefix + "Failed to send binary message: '{message}'. Error: {error}", Name, message, e.Message);
                         }
                     }
                 }
@@ -232,24 +231,24 @@ namespace Websocket.Client
             catch (TaskCanceledException e)
             {
                 // task was canceled, ignore
-                _logger.LogDebug(e, L("Sending binary thread failed, error: {error}. Shutting down."), Name, e.Message);
+                _logger.LogDebug(e, LogPrefix + "Sending binary thread failed, error: {error}. Shutting down.", Name, e.Message);
             }
             catch (OperationCanceledException e)
             {
                 // operation was canceled, ignore
-                _logger.LogDebug(e, L("Sending binary thread failed, error: {error}. Shutting down."), Name, e.Message);
+                _logger.LogDebug(e, LogPrefix + "Sending binary thread failed, error: {error}. Shutting down.", Name, e.Message);
             }
             catch (Exception e)
             {
                 if (_cancellationTotal?.IsCancellationRequested == true || _disposing)
                 {
                     // disposing/canceling, do nothing and exit
-                    _logger.LogDebug(e, L("Sending binary thread failed, error: {error}. Shutting down."), Name, e.Message);
+                    _logger.LogDebug(e, LogPrefix + "Sending binary thread failed, error: {error}. Shutting down.", Name, e.Message);
                     BinarySenderRunning = false;
                     return;
                 }
 
-                _logger.LogDebug(e, L("Sending binary thread failed, error: {error}. Creating a new sending thread."), Name, e.Message);
+                _logger.LogDebug(e, LogPrefix + "Sending binary thread failed, error: {error}. Creating a new sending thread.", Name, e.Message);
                 StartBackgroundThreadForSendingBinary();
             }
             BinarySenderRunning = false;
@@ -257,19 +256,19 @@ namespace Websocket.Client
 
         private void StartBackgroundThreadForSendingText()
         {
-            _ = Task.Factory.StartNew(_ => SendTextFromQueue(), TaskCreationOptions.LongRunning, _cancellationTotal?.Token ?? CancellationToken.None);
+            _ = Task.Run(SendTextFromQueue, _cancellationTotal?.Token ?? CancellationToken.None);
         }
 
         private void StartBackgroundThreadForSendingBinary()
         {
-            _ = Task.Factory.StartNew(_ => SendBinaryFromQueue(), TaskCreationOptions.LongRunning, _cancellationTotal?.Token ?? CancellationToken.None);
+            _ = Task.Run(SendBinaryFromQueue, _cancellationTotal?.Token ?? CancellationToken.None);
         }
 
         private async Task SendInternalSynchronized(RequestMessage message)
         {
-            using (await _locker.LockAsync())
+            using (await _locker.LockAsync().ConfigureAwait(false))
             {
-                await SendInternal(message);
+                await SendInternal(message).ConfigureAwait(false);
             }
         }
 
@@ -296,13 +295,24 @@ namespace Websocket.Client
 
         private async Task SendTextMessage(RequestTextMessage textMessage)
         {
-            var payload = MemoryMarshal.AsMemory<byte>(GetEncoding().GetBytes(textMessage.Text));
-            await SendInternal(payload, WebSocketMessageType.Text).ConfigureAwait(false);
+            var encoding = GetEncoding();
+            var byteCount = encoding.GetByteCount(textMessage.Text);
+            var buffer = ArrayPool<byte>.Shared.Rent(byteCount);
+
+            try
+            {
+                var written = encoding.GetBytes(textMessage.Text, 0, textMessage.Text.Length, buffer, 0);
+                await SendInternal(buffer.AsMemory(0, written), WebSocketMessageType.Text).ConfigureAwait(false);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
         }
 
         private async Task SendBinaryMessage(RequestBinaryMessage binaryMessage)
         {
-            var payload = MemoryMarshal.AsMemory<byte>(binaryMessage.Data);
+            var payload = new ReadOnlyMemory<byte>(binaryMessage.Data);
             await SendInternal(payload, WebSocketMessageType.Text).ConfigureAwait(false);
         }
 
@@ -318,16 +328,16 @@ namespace Websocket.Client
 
         private async Task SendInternalSynchronized(ReadOnlySequence<byte> message)
         {
-            using (await _locker.LockAsync())
+            using (await _locker.LockAsync().ConfigureAwait(false))
             {
-                await SendInternal(message, WebSocketMessageType.Binary);
+                await SendInternal(message, WebSocketMessageType.Binary).ConfigureAwait(false);
             }
         }
         private async Task SendInternalSynchronized(ReadOnlyMemory<byte> message)
         {
-            using (await _locker.LockAsync())
+            using (await _locker.LockAsync().ConfigureAwait(false))
             {
-                await SendInternal(message, WebSocketMessageType.Binary);
+                await SendInternal(message, WebSocketMessageType.Binary).ConfigureAwait(false);
             }
         }
 
@@ -372,11 +382,11 @@ namespace Websocket.Client
         {
             if (!IsClientConnected())
             {
-                _logger.LogDebug(L("Client is not connected to server, cannot send binary, length: {length}"), Name, length);
+                _logger.LogDebug(LogPrefix + "Client is not connected to server, cannot send binary, length: {length}", Name, length);
                 return false;
             }
 
-            _logger.LogTrace(L("Sending binary, length: {length}"), Name, length);
+            _logger.LogTrace(LogPrefix + "Sending binary, length: {length}", Name, length);
             return true;
         }
     }

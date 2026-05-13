@@ -48,7 +48,8 @@ namespace Websocket.Client
                 return Text ?? string.Empty;
             }
 
-            return $"Type binary, length: {Binary?.Length}";
+            var length = Stream?.Length ?? _binary?.Length;
+            return $"Type binary, length: {length}";
         }
 
         /// <summary>
