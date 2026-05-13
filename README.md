@@ -15,7 +15,7 @@ This is a wrapper over native C# class `ClientWebSocket` with built-in reconnect
 ### Features
 
 * installation via NuGet ([Websocket.Client](https://www.nuget.org/packages/Websocket.Client))
-* targeting .NET Standard 2.1, .NET 6, .NET 7, and .NET 8
+* targeting .NET Standard 2.1, .NET 6, .NET 7, .NET 8, .NET 9, and .NET 10
 * reactive extensions ([Rx.NET](https://github.com/Reactive-Extensions/Rx.NET))
 * integrated logging abstraction (`Microsoft.Extensions.Logging`)
 * using Channels for high performance sending queue
@@ -30,14 +30,17 @@ Websocket.Client is designed for long-running websocket consumers where per-mess
 * outgoing text messages are encoded into rented `ArrayPool<byte>` buffers
 * the sending queue uses `System.Threading.Channels` with a single reader
 * public observable wrappers are cached to avoid per-access wrapper allocations
+* disabled trace logging is guarded to avoid hot-path log argument allocations
+* multi-segment binary sends complete on the final real segment without an extra empty websocket frame
 
 Representative BenchmarkDotNet results show meaningful improvements on typical small and medium messages:
 
-* 128 B text receive path: `355.76 ns / 560 B` to `54.36 ns / 280 B`
-* 4 KB text receive path: `1.130 us / 8496 B` to `738.98 ns / 8216 B`
-* 1024 char text send encoding: `134.04 ns / 1048 B` to `87.44 ns / 0 B`
-* 8192 char text send encoding: `974.85 ns / 8216 B` to `501.86 ns / 0 B`
-* stream-backed binary `ResponseMessage.ToString()` at 32 KB: `1.880 us / 32872 B` to `101.23 ns / 104 B`
+* 128 B text receive path: `264.17 ns / 560 B` to `36.26 ns / 280 B`
+* 4 KB text receive path: `784.50 ns / 8496 B` to `485.90 ns / 8216 B`
+* 1024 char text send encoding: `102.36 ns / 1048 B` to `71.05 ns / 0 B`
+* 8192 char text send encoding: `738.40 ns / 8216 B` to `419.79 ns / 0 B`
+* disabled trace logging: `28.72 ns / 64 B` to approximately `0 ns / 0 B`
+* stream-backed binary `ResponseMessage.ToString()` at 32 KB: `1.149 us / 32872 B` to `44.60 ns / 104 B`
 
 For very large text messages, the resulting `string` allocation dominates the receive cost, so the library focuses on avoiding unnecessary intermediate allocations and avoiding retention of oversized receive buffers after traffic spikes.
 

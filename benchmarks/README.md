@@ -1,8 +1,8 @@
 # Websocket.Client Benchmarks
 
-This folder contains BenchmarkDotNet benchmarks for the allocation-sensitive Websocket.Client hot paths.
+This folder contains BenchmarkDotNet benchmarks for allocation-sensitive Websocket.Client hot paths.
 
-The latest representative run below was captured on Windows 11, AMD Ryzen 9 3900X, .NET SDK 10.0.201, running the benchmarks on .NET 8.0.25 with BenchmarkDotNet `ShortRun`.
+The latest representative run below was captured on Windows 11, AMD Ryzen 9 3900X, .NET SDK 10.0.201, running the benchmarks on .NET 10.0.5 with BenchmarkDotNet `ShortRun`.
 
 Run all benchmarks:
 
@@ -15,6 +15,8 @@ Run the most relevant receive/send benchmarks:
 ```powershell
 dotnet run --configuration Release --project benchmarks\Websocket.Client.Benchmarks -- --filter "*ReceiveBufferBenchmarks*"
 dotnet run --configuration Release --project benchmarks\Websocket.Client.Benchmarks -- --filter "*TextSendEncodingBenchmarks*"
+dotnet run --configuration Release --project benchmarks\Websocket.Client.Benchmarks -- --filter "*TraceLoggingBenchmarks*"
+dotnet run --configuration Release --project benchmarks\Websocket.Client.Benchmarks -- --filter "*SendSequenceFramingBenchmarks*"
 ```
 
 Results are written to `BenchmarkDotNet.Artifacts\results`.
@@ -25,6 +27,8 @@ Results are written to `BenchmarkDotNet.Artifacts\results`.
 - `TextSendEncodingBenchmarks` compares outgoing text encoding through `Encoding.GetBytes(string)` against encoding into an `ArrayPool<byte>` buffer.
 - `ResponseMessageBenchmarks` measures the `ResponseMessage.ToString()` stream-copy fix.
 - `ObservablePropertyBenchmarks` measures cached observable properties versus creating an `AsObservable()` wrapper on every access.
+- `TraceLoggingBenchmarks` measures disabled trace logging before and after explicit `IsEnabled(LogLevel.Trace)` guards.
+- `SendSequenceFramingBenchmarks` measures multi-segment `ReadOnlySequence<byte>` framing before and after removing the extra empty final websocket frame.
 - `ClientReceiveBenchmarks` measures the current public `WebsocketClient` receive path using an in-memory scripted `WebSocket`.
 
 Use the Ratio and Allocated columns for the quick answer. Values below 1.00 in Ratio are faster than the baseline, and lower Allocated values mean less GC pressure.
@@ -37,10 +41,10 @@ Use the Ratio and Allocated columns for the quick answer. Values below 1.00 in R
 
 | Message size | Before: RecyclableMemoryStream | PR #158: ArrayBufferWriter | Current: pooled buffer | Current impact |
 | ---: | ---: | ---: | ---: | --- |
-| 128 B | 355.76 ns, 560 B | 63.18 ns, 280 B | 54.36 ns, 280 B | 85% faster, 50% less allocation |
-| 4 KB | 1.130 us, 8496 B | 847.05 ns, 8216 B | 738.98 ns, 8216 B | 35% faster, slightly less allocation |
-| 32 KB | 4.966 us, 65840 B | 5.440 us, 65560 B | 5.166 us, 65560 B | roughly neutral |
-| 128 KB | 98.302 us, 262476 B | 98.932 us, 262196 B | 105.350 us, 262224 B | roughly neutral; avoids retaining a large receive buffer |
+| 128 B | 264.17 ns, 560 B | 41.68 ns, 280 B | 36.26 ns, 280 B | 86% faster, 50% less allocation |
+| 4 KB | 784.50 ns, 8496 B | 558.66 ns, 8216 B | 485.90 ns, 8216 B | 38% faster, slightly less allocation |
+| 32 KB | 4.033 us, 65840 B | 4.202 us, 65560 B | 4.405 us, 65560 B | roughly neutral; output string dominates |
+| 128 KB | 65.438 us, 262476 B | 64.906 us, 262196 B | 68.104 us, 262224 B | roughly neutral; avoids retaining a large receive buffer |
 
 ### Text Send Encoding
 
@@ -48,9 +52,28 @@ Use the Ratio and Allocated columns for the quick answer. Values below 1.00 in R
 
 | Message length | Before: `Encoding.GetBytes` | Current: ArrayPool encode | Current impact |
 | ---: | ---: | ---: | --- |
-| 32 chars | 16.39 ns, 56 B | 40.13 ns, 0 B | removes allocation with a small CPU cost |
-| 1024 chars | 134.04 ns, 1048 B | 87.44 ns, 0 B | 35% faster, allocation-free |
-| 8192 chars | 974.85 ns, 8216 B | 501.86 ns, 0 B | 48% faster, allocation-free |
+| 32 chars | 13.24 ns, 56 B | 22.35 ns, 0 B | removes allocation with a tiny CPU cost |
+| 1024 chars | 102.36 ns, 1048 B | 71.05 ns, 0 B | 31% faster, allocation-free |
+| 8192 chars | 738.40 ns, 8216 B | 419.79 ns, 0 B | 43% faster, allocation-free |
+
+### Disabled Trace Logging
+
+`TraceLoggingBenchmarks` measures hot receive/send trace logging when the logger has trace disabled, which is the common production path.
+
+| Scenario | Mean | Allocated | Impact |
+| --- | ---: | ---: | --- |
+| Before: unguarded `LogTrace` | 28.72 ns | 64 B | baseline |
+| Current: `IsEnabled(LogLevel.Trace)` guard | ~0 ns | 0 B | removes disabled trace allocation entirely |
+
+### Multi-Segment Send Framing
+
+`SendSequenceFramingBenchmarks` isolates the CPU cost of framing a multi-segment `ReadOnlySequence<byte>`. The loop cost is effectively neutral, but the current implementation sends `SegmentCount` websocket frames instead of `SegmentCount + 1` by completing the final real segment rather than sending an extra empty final frame.
+
+| Segments | Previous frame count | Current frame count | CPU benchmark result |
+| ---: | ---: | ---: | --- |
+| 2 | 3 | 2 | 6.57 ns to 7.03 ns, 0 B allocated |
+| 4 | 5 | 4 | 10.60 ns to 10.56 ns, 0 B allocated |
+| 8 | 9 | 8 | 17.90 ns to 17.50 ns, 0 B allocated |
 
 ### Binary Message Logging
 
@@ -58,9 +81,9 @@ Use the Ratio and Allocated columns for the quick answer. Values below 1.00 in R
 
 | Message size | Before: stream `ToArray()` | Current: stream `Length` | Current impact |
 | ---: | ---: | ---: | --- |
-| 64 B | 56.69 ns, 160 B | 98.88 ns, 96 B | less allocation, slightly slower |
-| 4 KB | 348.65 ns, 4192 B | 103.42 ns, 96 B | 70% faster, 98% less allocation |
-| 32 KB | 1.880 us, 32872 B | 101.23 ns, 104 B | 95% faster, near-zero payload allocation |
+| 64 B | 38.08 ns, 160 B | 38.17 ns, 96 B | less allocation, neutral CPU |
+| 4 KB | 259.38 ns, 4192 B | 41.16 ns, 96 B | 84% faster, 98% less allocation |
+| 32 KB | 1.149 us, 32872 B | 44.60 ns, 104 B | 96% faster, near-zero payload allocation |
 
 ### Observable Property Access
 
@@ -68,8 +91,8 @@ Use the Ratio and Allocated columns for the quick answer. Values below 1.00 in R
 
 | Scenario | Mean | Allocated |
 | --- | ---: | ---: |
-| Before: `AsObservable()` per access | 17.81 ns | 24 B |
-| Current: cached observable wrapper | 0.69 ns | 0 B |
+| Before: `AsObservable()` per access | 9.27 ns | 24 B |
+| Current: cached observable wrapper | 0.66 ns | 0 B |
 
 ### Current Client Receive Path
 
@@ -77,7 +100,7 @@ Use the Ratio and Allocated columns for the quick answer. Values below 1.00 in R
 
 | Messages | Message size | Mean | Allocated |
 | ---: | ---: | ---: | ---: |
-| 100 | 64 B | 15.24 us | 29.4 KB |
-| 100 | 1024 B | 32.86 us | 216.9 KB |
-| 1000 | 64 B | 135.71 us | 240.34 KB |
-| 1000 | 1024 B | 275.40 us | 2115.34 KB |
+| 100 | 64 B | 10.19 us | 25.42 KB |
+| 100 | 1024 B | 25.09 us | 212.93 KB |
+| 1000 | 64 B | 81.07 us | 201.21 KB |
+| 1000 | 1024 B | 215.61 us | 2076.21 KB |

@@ -354,15 +354,29 @@ namespace Websocket.Client
                 return;
             }
 
-            foreach (var memory in payload)
+            var client = _client!;
+            var cancellationToken = _cancellation?.Token ?? CancellationToken.None;
+            var segments = payload.GetEnumerator();
+            if (!segments.MoveNext())
             {
-                await _client!
-                    .SendAsync(memory, messageType, false, _cancellation?.Token ?? CancellationToken.None)
+                await client
+                    .SendAsync(_emptyArray, messageType, true, cancellationToken)
                     .ConfigureAwait(false);
+                return;
             }
 
-            await _client!
-                .SendAsync(_emptyArray, messageType, true, _cancellation?.Token ?? CancellationToken.None)
+            var current = segments.Current;
+            while (segments.MoveNext())
+            {
+                await client
+                    .SendAsync(current, messageType, false, cancellationToken)
+                    .ConfigureAwait(false);
+
+                current = segments.Current;
+            }
+
+            await client
+                .SendAsync(current, messageType, true, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -373,8 +387,11 @@ namespace Websocket.Client
                 return;
             }
 
-            await _client!
-                .SendAsync(payload, messageType, true, _cancellation?.Token ?? CancellationToken.None)
+            var client = _client!;
+            var cancellationToken = _cancellation?.Token ?? CancellationToken.None;
+
+            await client
+                .SendAsync(payload, messageType, true, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -386,7 +403,11 @@ namespace Websocket.Client
                 return false;
             }
 
-            _logger.LogTrace(LogPrefix + "Sending binary, length: {length}", Name, length);
+            if (_logger.IsEnabled(LogLevel.Trace))
+            {
+                _logger.LogTrace(LogPrefix + "Sending binary, length: {length}", Name, length);
+            }
+
             return true;
         }
     }

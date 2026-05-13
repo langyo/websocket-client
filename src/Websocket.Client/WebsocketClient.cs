@@ -562,7 +562,11 @@ namespace Websocket.Client
                             }
                         }
 
-                        _logger.LogTrace(LogPrefix + "Received:  {message}", Name, message);
+                        if (_logger.IsEnabled(LogLevel.Trace))
+                        {
+                            _logger.LogTrace(LogPrefix + "Received:  {message}", Name, message);
+                        }
+
                         _lastReceivedMsg = DateTime.UtcNow;
                         _messageReceivedSubject.OnNext(message);
                     }
