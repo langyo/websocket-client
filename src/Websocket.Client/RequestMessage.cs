@@ -1,47 +1,61 @@
-﻿using System;
+using System;
 using System.Buffers;
 
 namespace Websocket.Client
 {
-    internal abstract class RequestMessage { }
-
-    internal class RequestTextMessage : RequestMessage
+    internal enum RequestMessageType
     {
-        public string Text { get; }
+        None = 0,
+        Text = 1,
+        Binary = 2,
+        BinarySegment = 3,
+        BinarySequence = 4
+    }
 
-        public RequestTextMessage(string text)
+    internal readonly struct RequestMessage
+    {
+        private RequestMessage(
+            RequestMessageType type,
+            string? text = null,
+            byte[]? binary = null,
+            ArraySegment<byte> binarySegment = default,
+            ReadOnlySequence<byte> binarySequence = default)
         {
+            Type = type;
             Text = text;
+            Binary = binary;
+            BinarySegment = binarySegment;
+            BinarySequence = binarySequence;
         }
-    }
 
-    internal class RequestBinaryMessage : RequestMessage
-    {
-        public byte[] Data { get; }
+        public RequestMessageType Type { get; }
 
-        public RequestBinaryMessage(byte[] data)
+        public string? Text { get; }
+
+        public byte[]? Binary { get; }
+
+        public ArraySegment<byte> BinarySegment { get; }
+
+        public ReadOnlySequence<byte> BinarySequence { get; }
+
+        public static RequestMessage TextMessage(string text)
         {
-            Data = data;
+            return new RequestMessage(RequestMessageType.Text, text: text);
         }
-    }
 
-    internal class RequestBinarySegmentMessage : RequestMessage
-    {
-        public ArraySegment<byte> Data { get; }
-
-        public RequestBinarySegmentMessage(ArraySegment<byte> data)
+        public static RequestMessage BinaryMessage(byte[] binary)
         {
-            Data = data;
+            return new RequestMessage(RequestMessageType.Binary, binary: binary);
         }
-    }
 
-    internal class RequestBinarySequenceMessage : RequestMessage
-    {
-        public ReadOnlySequence<byte> Data { get; }
-
-        public RequestBinarySequenceMessage(ReadOnlySequence<byte> data)
+        public static RequestMessage BinarySegmentMessage(ArraySegment<byte> binary)
         {
-            Data = data;
+            return new RequestMessage(RequestMessageType.BinarySegment, binarySegment: binary);
+        }
+
+        public static RequestMessage BinarySequenceMessage(ReadOnlySequence<byte> binary)
+        {
+            return new RequestMessage(RequestMessageType.BinarySequence, binarySequence: binary);
         }
     }
 }

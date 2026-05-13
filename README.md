@@ -31,6 +31,7 @@ Websocket.Client is designed for long-running websocket consumers where per-mess
 * the sending queue uses `System.Threading.Channels` with a single reader
 * public observable wrappers are cached to avoid per-access wrapper allocations
 * disabled trace logging is guarded to avoid hot-path log argument allocations
+* queued text send requests use an internal value-type envelope to avoid a per-message wrapper allocation
 * multi-segment binary sends complete on the final real segment without an extra empty websocket frame
 
 Representative BenchmarkDotNet results show meaningful improvements on typical small and medium messages:
@@ -40,6 +41,7 @@ Representative BenchmarkDotNet results show meaningful improvements on typical s
 * 1024 char text send encoding: `102.36 ns / 1048 B` to `71.05 ns / 0 B`
 * 8192 char text send encoding: `738.40 ns / 8216 B` to `419.79 ns / 0 B`
 * disabled trace logging: `28.72 ns / 64 B` to approximately `0 ns / 0 B`
+* queued text request envelope: `31.54 ns / 24 B` to `29.65 ns / 0 B`
 * stream-backed binary `ResponseMessage.ToString()` at 32 KB: `1.149 us / 32872 B` to `44.60 ns / 104 B`
 
 For very large text messages, the resulting `string` allocation dominates the receive cost, so the library focuses on avoiding unnecessary intermediate allocations and avoiding retention of oversized receive buffers after traffic spikes.

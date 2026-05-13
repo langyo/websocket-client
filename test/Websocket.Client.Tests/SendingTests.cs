@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Reactive.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Websocket.Client.Tests.TestServer;
@@ -164,6 +165,34 @@ namespace Websocket.Client.Tests
             Assert.Equal(WebSocketMessageType.Binary, frames[1].MessageType);
             Assert.True(frames[1].EndOfMessage);
             Assert.Equal([15, 16], frames[1].Payload);
+        }
+
+        [Fact]
+        [Trait("Cat", "Sending")]
+        public async Task SendAsText_AllBinaryPayloadOverloads_ShouldSendTextFrames()
+        {
+            using var client = _context.CreateClient();
+            var receivedCount = 0;
+            var receivedEvent = new ManualResetEvent(false);
+
+            client.MessageReceived
+                .Where(x => x.Text == "pong")
+                .Subscribe(_ =>
+                {
+                    if (Interlocked.Increment(ref receivedCount) >= 3)
+                        receivedEvent.Set();
+                });
+
+            await client.Start();
+
+            var payload = Encoding.UTF8.GetBytes("ping");
+            Assert.True(client.SendAsText(payload));
+            Assert.True(client.SendAsText(new ArraySegment<byte>(payload)));
+            Assert.True(client.SendAsText(CreateSequence([112, 105], [110, 103])));
+
+            receivedEvent.WaitOne(TimeSpan.FromSeconds(30));
+
+            Assert.Equal(3, receivedCount);
         }
 
         [Fact]

@@ -39,7 +39,7 @@ namespace Websocket.Client
         {
             Validations.Validations.ValidateInput(message, nameof(message));
 
-            return _messagesTextToSendQueue.Writer.TryWrite(new RequestTextMessage(message));
+            return _messagesTextToSendQueue.Writer.TryWrite(RequestMessage.TextMessage(message));
         }
 
         /// <summary>
@@ -92,7 +92,7 @@ namespace Websocket.Client
         {
             Validations.Validations.ValidateInput(message, nameof(message));
 
-            return SendInternalSynchronized(new RequestTextMessage(message));
+            return SendInternalSynchronized(RequestMessage.TextMessage(message));
         }
 
         /// <summary>
@@ -118,7 +118,7 @@ namespace Websocket.Client
         {
             Validations.Validations.ValidateInput(message, nameof(message));
 
-            return _messagesTextToSendQueue.Writer.TryWrite(new RequestBinaryMessage(message));
+            return _messagesTextToSendQueue.Writer.TryWrite(RequestMessage.BinaryMessage(message));
         }
 
         /// <summary>
@@ -132,7 +132,7 @@ namespace Websocket.Client
         {
             Validations.Validations.ValidateInput(message, nameof(message));
 
-            return _messagesTextToSendQueue.Writer.TryWrite(new RequestBinarySegmentMessage(message));
+            return _messagesTextToSendQueue.Writer.TryWrite(RequestMessage.BinarySegmentMessage(message));
         }
 
         /// <summary>
@@ -146,7 +146,7 @@ namespace Websocket.Client
         {
             Validations.Validations.ValidateInput(message, nameof(message));
 
-            return _messagesTextToSendQueue.Writer.TryWrite(new RequestBinarySequenceMessage(message));
+            return _messagesTextToSendQueue.Writer.TryWrite(RequestMessage.BinarySequenceMessage(message));
         }
 
         /// <summary>
@@ -274,34 +274,34 @@ namespace Websocket.Client
 
         private async Task SendInternal(RequestMessage message)
         {
-            switch (message)
+            switch (message.Type)
             {
-                case RequestTextMessage textMessage:
-                    await SendTextMessage(textMessage).ConfigureAwait(false);
+                case RequestMessageType.Text:
+                    await SendTextMessage(message.Text!).ConfigureAwait(false);
                     break;
-                case RequestBinaryMessage binaryMessage:
-                    await SendBinaryMessage(binaryMessage).ConfigureAwait(false);
+                case RequestMessageType.Binary:
+                    await SendBinaryMessage(message.Binary!).ConfigureAwait(false);
                     break;
-                case RequestBinarySegmentMessage segmentMessage:
-                    await SendBinarySegmentMessage(segmentMessage).ConfigureAwait(false);
+                case RequestMessageType.BinarySegment:
+                    await SendBinarySegmentMessage(message.BinarySegment).ConfigureAwait(false);
                     break;
-                case RequestBinarySequenceMessage sequenceMessage:
-                    await SendBinarySequenceMessage(sequenceMessage).ConfigureAwait(false);
+                case RequestMessageType.BinarySequence:
+                    await SendBinarySequenceMessage(message.BinarySequence).ConfigureAwait(false);
                     break;
                 default:
-                    throw new ArgumentException($"Unknown message type: {message.GetType()}");
+                    throw new ArgumentException($"Unknown message type: {message.Type}");
             }
         }
 
-        private async Task SendTextMessage(RequestTextMessage textMessage)
+        private async Task SendTextMessage(string text)
         {
             var encoding = GetEncoding();
-            var byteCount = encoding.GetByteCount(textMessage.Text);
+            var byteCount = encoding.GetByteCount(text);
             var buffer = ArrayPool<byte>.Shared.Rent(byteCount);
 
             try
             {
-                var written = encoding.GetBytes(textMessage.Text, 0, textMessage.Text.Length, buffer, 0);
+                var written = encoding.GetBytes(text, 0, text.Length, buffer, 0);
                 await SendInternal(buffer.AsMemory(0, written), WebSocketMessageType.Text).ConfigureAwait(false);
             }
             finally
@@ -310,20 +310,20 @@ namespace Websocket.Client
             }
         }
 
-        private async Task SendBinaryMessage(RequestBinaryMessage binaryMessage)
+        private async Task SendBinaryMessage(byte[] binary)
         {
-            var payload = new ReadOnlyMemory<byte>(binaryMessage.Data);
+            var payload = new ReadOnlyMemory<byte>(binary);
             await SendInternal(payload, WebSocketMessageType.Text).ConfigureAwait(false);
         }
 
-        private async Task SendBinarySegmentMessage(RequestBinarySegmentMessage segmentMessage)
+        private async Task SendBinarySegmentMessage(ArraySegment<byte> segment)
         {
-            await SendInternal(segmentMessage.Data, WebSocketMessageType.Text).ConfigureAwait(false);
+            await SendInternal(segment, WebSocketMessageType.Text).ConfigureAwait(false);
         }
 
-        private async Task SendBinarySequenceMessage(RequestBinarySequenceMessage sequenceMessage)
+        private async Task SendBinarySequenceMessage(ReadOnlySequence<byte> sequence)
         {
-            await SendInternal(sequenceMessage.Data, WebSocketMessageType.Text).ConfigureAwait(false);
+            await SendInternal(sequence, WebSocketMessageType.Text).ConfigureAwait(false);
         }
 
         private async Task SendInternalSynchronized(ReadOnlySequence<byte> message)

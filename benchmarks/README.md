@@ -16,6 +16,7 @@ Run the most relevant receive/send benchmarks:
 dotnet run --configuration Release --project benchmarks\Websocket.Client.Benchmarks -- --filter "*ReceiveBufferBenchmarks*"
 dotnet run --configuration Release --project benchmarks\Websocket.Client.Benchmarks -- --filter "*TextSendEncodingBenchmarks*"
 dotnet run --configuration Release --project benchmarks\Websocket.Client.Benchmarks -- --filter "*TraceLoggingBenchmarks*"
+dotnet run --configuration Release --project benchmarks\Websocket.Client.Benchmarks -- --filter "*RequestMessageBenchmarks*"
 dotnet run --configuration Release --project benchmarks\Websocket.Client.Benchmarks -- --filter "*SendSequenceFramingBenchmarks*"
 ```
 
@@ -28,6 +29,7 @@ Results are written to `BenchmarkDotNet.Artifacts\results`.
 - `ResponseMessageBenchmarks` measures the `ResponseMessage.ToString()` stream-copy fix.
 - `ObservablePropertyBenchmarks` measures cached observable properties versus creating an `AsObservable()` wrapper on every access.
 - `TraceLoggingBenchmarks` measures disabled trace logging before and after explicit `IsEnabled(LogLevel.Trace)` guards.
+- `RequestMessageBenchmarks` measures the queued text-send request envelope before and after replacing an internal class wrapper with a value type.
 - `SendSequenceFramingBenchmarks` measures multi-segment `ReadOnlySequence<byte>` framing before and after removing the extra empty final websocket frame.
 - `ClientReceiveBenchmarks` measures the current public `WebsocketClient` receive path using an in-memory scripted `WebSocket`.
 
@@ -64,6 +66,15 @@ Use the Ratio and Allocated columns for the quick answer. Values below 1.00 in R
 | --- | ---: | ---: | --- |
 | Before: unguarded `LogTrace` | 28.72 ns | 64 B | baseline |
 | Current: `IsEnabled(LogLevel.Trace)` guard | ~0 ns | 0 B | removes disabled trace allocation entirely |
+
+### Queued Request Messages
+
+`RequestMessageBenchmarks` measures the queued text-send request envelope. The public `Send(string)` API is unchanged, but the internal queue item is now a value type instead of a small class hierarchy.
+
+| Scenario | Mean | Allocated | Impact |
+| --- | ---: | ---: | --- |
+| Before: class request envelope | 31.54 ns | 24 B | baseline |
+| Current: struct request envelope | 29.65 ns | 0 B | removes one allocation per queued text request |
 
 ### Multi-Segment Send Framing
 
